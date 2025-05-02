@@ -41,9 +41,13 @@ PISHOCK_API_KEY = (os.getenv('PISHOCK_API_KEY'))  # PiShock API key
 # Locked Users
 locked_users = set()
 locked_by_map = {}  # user_id -> locked_by
-AUTHORIZED_LOCK_MANAGERS = {1146469921270792326}  # Add more IDs if needed
 
+Mod = {1146469921270792326, 169981533187211264, 964573737477341235, 927628071706689636, 186523925264465920, 754523779887136799, 549181719362928643}
+additional_lock_managers = {
+    380625660277948426  # Another one
+}
 
+AUTHORIZED_LOCK_MANAGERS = Mod | additional_lock_managers
 
 
 # ------------------- Database Setup -------------------
@@ -201,6 +205,8 @@ last_user = None
 # Track usage per user
 user_command_timestamps = {}
 user_warned = {}
+pending_blackjack_timeout = None
+
 
 COMMAND_LIMIT = 5
 TIME_WINDOW = 10  # seconds
@@ -889,7 +895,6 @@ async def on_reaction_add(reaction, user):
 
 
 
-
 async def check_auth(ctx, target):
     c.execute("SELECT auth_level FROM user_auth WHERE user_id = ?", (target.id,))
     result = c.fetchone()
@@ -904,22 +909,29 @@ async def check_auth(ctx, target):
             requestor = ctx.author
             dm_channel = await target.create_dm()
 
-            # Notify the target
-            await dm_channel.send(
+            # Send permission request
+            prompt = await dm_channel.send(
                 f"🔐 {requestor.mention} is requesting to modify your status.\n"
-                f"Reply with **`yes`** to allow or **`no`** to deny. You have 5 minutes."
+                f"**Message:** `{ctx.message.content}`\n"
+                f"React with ✅ to **allow** or ❌ to **deny**. You have 5 minutes."
             )
+            await prompt.add_reaction("✅")
+            await prompt.add_reaction("❌")
 
-            # Notify the requestor
+            # Inform requester
             requestor_dm = await requestor.create_dm()
-            await requestor_dm.send(f"🕓 Waiting for {target.display_name} to respond to your request...")
+            await requestor_dm.send(f"🕓 Waiting for {target.display_name} to react...")
 
-            def check(m):
-                return m.author == target and m.channel == dm_channel and m.content.lower() in ["yes", "no"]
+            def reaction_check(reaction, user):
+                return (
+                    user.id == target.id and
+                    str(reaction.emoji) in ["✅", "❌"] and
+                    reaction.message.id == prompt.id
+                )
 
-            reply = await bot.wait_for('message', timeout=300.0, check=check)
+            reaction, user = await bot.wait_for('reaction_add', timeout=300.0, check=reaction_check)
 
-            if reply.content.lower() == "yes":
+            if str(reaction.emoji) == "✅":
                 await requestor_dm.send(f"✅ {target.display_name} **approved** your request.")
                 return True
             else:
@@ -931,6 +943,7 @@ async def check_auth(ctx, target):
             return False
 
     return True
+
 
 # ------------------- Commands -------------------
 @bot.command()
@@ -1692,7 +1705,7 @@ async def assign_lines(ctx, user: discord.Member = None, lines: str = None, *, a
         assigned_by = result[0]
 
         # Only allow if author is assigner or has manage_messages permission
-        if ctx.author.id != assigned_by and not ctx.author.guild_permissions.manage_messages and not ctx.author.id != 1146469921270792326:
+        if ctx.author.id != assigned_by and not ctx.author.guild_permissions.manage_messages and not ctx.author.id not in Mod:
             await ctx.message.add_reaction("❌")
             await ctx.send("❌ You can only clear lines you assigned, unless you have Manage Messages permission.")
             return
@@ -1853,7 +1866,7 @@ async def my_assignments(ctx):
 @bot.command(name="allow", aliases=["bypass"])
 async def allow(ctx, user: discord.Member):
     # Check mod role or specific allowed user ID
-    if not ctx.author.guild_permissions.manage_messages and ctx.author.id != 1146469921270792326:
+    if ctx.author.id not in Mod:
         await ctx.send("You do not have the required permissions to cancel a bet.")
         return
 
@@ -1875,6 +1888,28 @@ async def allow(ctx, user: discord.Member):
 
     conn.commit()
 
+@bot.command(name="allow_list")
+async def allow_list(ctx, user: discord.Member):
+    # Query allowed channels for the user
+    c.execute("SELECT channel_id FROM allowed_users WHERE user_id = ?", (user.id,))
+    rows = c.fetchall()
+
+    if not rows:
+        await ctx.send(f"📭 {user.mention} is not allowed to bypass in any channels.")
+        return
+
+    # Format channel mentions
+    channel_mentions = []
+    for (channel_id,) in rows:
+        channel = ctx.guild.get_channel(channel_id)
+        if channel:
+            channel_mentions.append(f"<#{channel_id}>")
+        else:
+            channel_mentions.append(f"[Unknown Channel ID: {channel_id}]")
+
+    # Send result
+    channel_list = ", ".join(channel_mentions)
+    await ctx.send(f"📄 {user.mention} is allowed to bypass in the following channels:\n{channel_list}")
 
 
 
@@ -2087,7 +2122,7 @@ async def cancel_bet(ctx, game: str):
     """Cancel a pending bet and refund both players their bet amount."""
     
     # Check if the user is an admin (can be adjusted based on your roles)
-    if not ctx.author.guild_permissions.manage_messages and ctx.author.id != 1146469921270792326:
+    if ctx.author.id not in Mod:
         await ctx.send("You do not have the required permissions to cancel a bet.")
         return
     
@@ -2238,10 +2273,13 @@ def get_balance(user_id):
     return row[0]
 
 
-@bot.command(name='add')
-@commands.check(lambda ctx: ctx.author.id == 1146469921270792326 or ctx.author.guild_permissions.administrator)
+@bot.command(name='add', aliases=['add_coins', 'create_coins'])
 async def add_coins(ctx, user: discord.Member, amount: int):
     # Ensure the amount is valid (positive)
+
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
     if amount <= -10000000000000000000000000000000000000:
         await ctx.send("❌ You must specify a positive amount of pet bucks to add.")
         return
@@ -2424,7 +2462,7 @@ async def roulette(ctx, bet_type: str, bet_value: str, bet_amount: int):
         winnings = bet_amount * 35  # 35:1 payout for numbers
     elif bet_type == 'color' and bet_value.lower() == spin_color:
         win = True
-        winnings = bet_amount * 2  # 2:1 payout for colors
+        winnings = bet_amount  # 2:1 payout for colors
     else:
         winnings = -bet_amount  # Loss
 
@@ -2460,7 +2498,7 @@ async def roulette(ctx, bet_type: str, bet_value: str, bet_amount: int):
 
 @bot.command()
 async def join(ctx):
-    global players, queue, game_in_progress
+    global players, queue, game_in_progress, pending_blackjack_timeout
 
     if ctx.channel.id != GAMBLING_ID:
         await ctx.send("❌ This command can only be used in the designated gambling channel.")
@@ -2477,8 +2515,13 @@ async def join(ctx):
     if ctx.author not in players:
         players.append(ctx.author)
         await ctx.send(f"{ctx.author.mention} has joined the Blackjack game!")
+
+        # Start timeout countdown if this is the first player
+        if len(players) == 1 and pending_blackjack_timeout is None:
+            pending_blackjack_timeout = asyncio.create_task(blackjack_join_timeout(ctx.channel))
     else:
         await ctx.send(f"{ctx.author.mention}, you're already in the current game.")
+
 
 # Player Leave Command
 @bot.command()
@@ -2498,7 +2541,12 @@ async def leave(ctx):
 # The blackjack command
 @bot.command()
 async def blackjack(ctx):
-    global players, queue, game_in_progress, current_bets
+    global players, queue, game_in_progress, current_bets, pending_blackjack_timeout
+
+        # Cancel timeout task if a game is starting
+    if pending_blackjack_timeout:
+        pending_blackjack_timeout.cancel()
+        pending_blackjack_timeout = None
 
     if ctx.channel.id != GAMBLING_ID:
         await ctx.send("❌ This command can only be used in the designated gambling channel.")
@@ -2698,6 +2746,8 @@ async def blackjack(ctx):
     # Cleanup
     game_in_progress = False
     current_bets.clear()
+    if pending_blackjack_timeout is None:
+            pending_blackjack_timeout = asyncio.create_task(blackjack_join_timeout(ctx.channel))
     if queue:
         await ctx.send(f"🎮 Next game starting with: {', '.join([p.mention for p in queue])}")
         players.extend(queue)
@@ -2764,6 +2814,22 @@ def update_running_count(card):
         running_count += 1
     elif card[0] in ['10', 'J', 'Q', 'K', 'A']:
         running_count -= 1
+
+async def blackjack_join_timeout(channel):
+    global players, queue, pending_blackjack_timeout
+
+    await asyncio.sleep(300)  # 5 minutes
+
+    if not game_in_progress and players:
+        removed_mentions = ', '.join([p.mention for p in players])
+        await channel.send(
+            f"🕒 No Blackjack game started in 5 minutes. Removing these players from the table: {removed_mentions}"
+        )
+        players.clear()
+        queue.clear()
+
+    pending_blackjack_timeout = None  # Reset the task tracker
+
 
 # ------------------- Gambling Help -------------------
 @bot.command(aliases=["gamble", "games"])
@@ -2881,9 +2947,12 @@ async def click(ctx):
         await ctx.send("Audio is already playing.")
 
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def ping(ctx):
     # Check if the user is in a voice channel
+
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
     if not ctx.author.voice or not ctx.author.voice.channel:
         await ctx.send("You need to be in a voice channel to use this command.")
         return
@@ -2918,8 +2987,11 @@ async def ping(ctx):
         await ctx.send("Audio is already playing.")
 
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def windows(ctx):
+
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
     # Check if the user is in a voice channel
     if not ctx.author.voice or not ctx.author.voice.channel:
         await ctx.send("You need to be in a voice channel to use this command.")
@@ -2955,8 +3027,10 @@ async def windows(ctx):
         await ctx.send("Audio is already playing.")
 
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def iphone(ctx):
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
     # Check if the user is in a voice channel
     if not ctx.author.voice or not ctx.author.voice.channel:
         await ctx.send("You need to be in a voice channel to use this command.")
@@ -2992,8 +3066,10 @@ async def iphone(ctx):
         await ctx.send("Audio is already playing.")
 
 @bot.command()
-#@commands.has_permissions(administrator=True)
 async def speak(ctx, *, message: str):
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
     """Makes the bot speak a message in the voice channel it is already in."""
     if ctx.voice_client:  # Check if the bot is already in a voice channel
         # Generate TTS audio file from the message
@@ -3105,8 +3181,10 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
 # Command to toggle the mute status of a user
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def mute(ctx, user: discord.Member):
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
     """Add or remove a user from the muted target list."""
     
     # If the user is in the target list, remove them, otherwise add them
@@ -3133,8 +3211,11 @@ async def mute_unmute_loop(member: discord.Member):
 
 # Command to toggle the deafen status of a user
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def deafen(ctx, user: discord.Member):
+
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
     """Add or remove a user from the deafened target list."""
     
     # If the user is in the target list, remove them, otherwise add them
@@ -3360,8 +3441,11 @@ async def ban_list(ctx, user: discord.Member = None):
 
 
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def resetdb(ctx):
+
+    if ctx.author.id != 1146469921270792326:
+        await ctx.send("You do not have the required permissions to clear the DB.")
+        return
     """Reset all database records (admin only)"""
     c.execute("DELETE FROM gagged_users")
     c.execute("DELETE FROM prison_users")
@@ -3392,8 +3476,8 @@ async def untimeout(ctx, user: discord.Member):
     """Un-timeout a user by timing them out for 1 second or apply timeout for missing required words."""
     
     # Check if the user has permission (moderators or user with ID 1146469921270792326)
-    if not any(role.name.lower() == 'moderator' for role in ctx.author.roles) and ctx.author.id != 1146469921270792326:
-        await ctx.send("❌ You do not have permission to use this command.")
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
         return
 
     try:
@@ -3417,8 +3501,8 @@ async def timeout(ctx, user: discord.Member):
     """timeout a user by timing them out for 1 second or apply timeout for missing required words."""
     
     # Check if the user has permission (moderators or user with ID 1146469921270792326)
-    if not any(role.name.lower() == 'moderator' for role in ctx.author.roles) and ctx.author.id != 1146469921270792326:
-        await ctx.send("❌ You do not have permission to use this command.")
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
         return
 
     try:
@@ -4070,21 +4154,25 @@ async def lock(ctx, user: discord.Member = None):
 @bot.command()
 async def restart(ctx):
     # Check if user is an admin or the specific allowed user
-    if ctx.author.guild_permissions.administrator or ctx.author.id == 1146469921270792326:
-        await ctx.send("🔄 Restarting bot...")
-        subprocess.Popen([sys.executable, os.path.realpath(__file__)])
-        sys.exit(0)
-    else:
-        await ctx.send("❌ You don’t have permission to restart the bot.")
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
+
+    await ctx.send("🔄 Restarting bot...")
+    subprocess.Popen([sys.executable, os.path.realpath(__file__)])
+    sys.exit(0)
+
 
 @bot.command()
 async def shutdown(ctx):
     # Check if user is an admin or the specific allowed user
-    if ctx.author.guild_permissions.administrator or ctx.author.id == 1146469921270792326:
-        await ctx.send("# OWIIIEEEE!! BOT IS OFFLINE... BEFORE YOU SAY 'THIS IS BROKEN PLEASE FIX'")
-        await bot.close()
-    else:
-        await ctx.send("❌ You don’t have permission to shut down the bot.")
+    if ctx.author.id not in Mod:
+        await ctx.send("You do not have the required permissions to this command.")
+        return
+
+    await ctx.send("# OWIIIEEEE!! BOT IS OFFLINE... BEFORE YOU SAY 'THIS IS BROKEN PLEASE FIX'")
+    await bot.close()
+
 
 
 # ------------------- Error Handling -------------------
@@ -4128,6 +4216,39 @@ async def before_cleanup():
     await bot.wait_until_ready()
 
 cleanup_old_logs.start()
+
+@bot.command(name="command_logs")
+async def command_logs(ctx):
+    # Fetch the 10 most recent logs
+    c.execute('''
+        SELECT user_id, command, arguments
+        FROM command_logs
+        ORDER BY rowid DESC
+        LIMIT 10
+    ''')
+    logs = c.fetchall()
+
+    if not logs:
+        await ctx.send("No command logs found.")
+        return
+
+    embed = discord.Embed(title="📝 Last 10 Command Logs", color=0x3498db)
+
+    for idx, (user_id, command, arguments) in enumerate(logs, start=1):
+        member = ctx.guild.get_member(user_id)
+        if member:
+            display_name = f"{member.display_name} ({member.name})"
+        else:
+            display_name = f"User ID {user_id}"
+
+        embed.add_field(
+            name=f"{idx}. {display_name}",
+            value=f"**Command:** `{command}`\n**Args:** `{arguments or 'None'}`",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
 
 # Register a custom adapter for datetime objects
 def adapt_datetime(dt):
