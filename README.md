@@ -1,0 +1,2 @@
+# TetherBot
+Discord BOt
