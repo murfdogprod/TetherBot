@@ -1,0 +1,345 @@
+# -------------------------- SETUP / USER ONLY COMMANDS -----------------
+Settings
+    """
+    Manage your enforcement actions.
+    Usage:
+      !>settings                - Show your current settings
+      !>settings add gag        - Add an action
+      !>settings remove timeout - Remove an action
+      !>settings help           - Show help
+    """
+
+Auth
+!>auth valid_mode
+valid_modes = ["ask", "public", "exposed", "off"] 
+
+ask sends dm if someone wants to change something of yours
+
+public is anyone but you can change your stuff
+
+exposed: anyone can change your stuff (including you)
+
+off: no one can change except you
+
+
+
+Red
+!>red
+deletes all your data with TetherBot
+
+
+# --------------------------- Info Commands on User ---------------------
+
+Status
+!>status
+OR
+!>status @user
+shows the basic bot statics on the user or author (prison check, solitary cell, gag check, etc)
+
+Ban List
+!>ban_list @user (or no @user for author)
+Shows the list of banned words for a user
+
+Enforced List
+!>enforced_list @user (or no @user for author)
+shows the list of enforced words for a user
+
+
+# -------------------------- RESTRICTING ACTIONS ------------------------
+Enforce
+    """Force a user to include specific words in their messages
+    Usage: !>enforced @user "required_word" [initial_time] [added_time]"""
+Requires User to use word in every message they send. 
+if they violate, they get timed out for initial_time and add added_time for each additional offense
+
+Unenforce
+    """Remove enforced word requirement for a user
+    Usage: !>unenforce @user "required_word"""
+
+Ban
+    """Ban a user from using specific words
+    Usage: !>ban @user "forbidden word" [initial_time] [added_time]"""
+Bans a user from using a forbidden word in their messages
+if they violate, they get timed out for initial_time and add added_time for each additional offense
+
+Unban
+    """Unban a word for a user
+    Usage: !>unban @user "forbidden word"""
+
+Gag
+!>gag @user type
+use !>gag_help to see help with gags
+use !>gag_types to see list of gags
+gags a users messages
+
+Ungag
+!>ungag @user
+same as !>gag @user ungag
+removes the gag from user
+
+Ignore (Toggleable)
+!>ignore @user
+does not allow the user to interact with reaction emojis with the bot
+
+Cooldown
+!>cooldown @user #
+sets the cooldown for the user for # of seconds
+this is the amount of time that the user must wait between their messages
+set to 0 to remove
+
+Prison
+!>prison @user add
+!>prison @user remove
+adds or removes a user from prison
+this locks the user to the channel that this command is called in
+
+Solitary
+!>solitary @user add
+!>solitary @user remove
+adds or removes user to solitary
+this locks the user to their own thread in the prison channel (uses same thread for same user)
+
+Lock (Toggleable)
+!>lock @user
+locks the user so they and non-mods cannot edit their restraints
+
+
+# -------------------------- LINES ------------------------------------
+
+Assign Lines
+!>assign_lines @user #1 "Line" #2
+OR
+!>lines @user #1 "Line" #2
+assigns the user #1 amount of lines. the line they must type is "Line". #2 is optional and is penalty added for each incorrect line
+user must start lines with !>start #
+
+Start
+!>start #
+user is given id number of their line assignment and they use !>start # to start the line writing
+the user cannot type in any other channel while line writing is active
+
+My assignments
+!>my_assignments
+shows the progress of line assignments that the author assigned
+
+
+
+# --------------------------------- PiShock Commands -----------------------------------
+
+Shock
+!>shock @user #
+Shocks the user (if they have linked pishock) for #% intensity
+
+Vibrate
+!>vibrate @user #
+Vibrates the user (if they have linked pishock) for #% intensity
+
+Beep
+!>beep @user #
+Sends a beep to @user (if they have linked pishock) for # seconds
+
+
+
+
+
+
+# ------------------------------- PET BUCKS --------------------------------
+Balance
+!>balance
+OR
+!>balance @user
+(can also use !>wallet, !>coins, !>petbucks, !>bucks)
+(1st time for user): initiates the users' coin balance (start at 1000)
+shows the current balance of user
+
+Leaderboard
+!>leaderboard
+shows top 10 users by coins
+
+Daily
+!>daily OR !>streak OR !>daily_claim OR !>claim
+once per 24 hrs for each user
+claims their daily coins (50)
+streak adds 5 for each day in a row
+
+Give
+!>give @user #
+gives the user # of coins from your wallet to theirs
+
+Bet
+!>bet @user # "Game"
+bets the author vs user with the # of coins
+both the author and user must have enough coins to complete the bet
+user must agree (30 secs)
+"Game" is used to track the bet
+
+Bet Payout
+!>bet_result "Game" @winner
+"Game" must exactly match "Game" set in !>bet
+pays out the user @winner
+must be confirmed by at least one other user (60 secs)
+
+Cancel Bet (Mod Only)
+!>cancel_bet "Game"
+"Game" must exactly match "Game" set in !>bet
+cancels the bet and pays back both user and author of original bet
+
+Add Coins (Mod Only)
+!>add @user #
+OR
+!>add_coins @user #
+creates and gives # number of coins to @user
+can be negative
+
+
+
+# --------------------------- Gambling ----------------------------
+
+Helper Function
+!>play, !>games, !>gamble
+shows the different games and how to play
+
+Coin Flip
+!>flip
+OR
+!>flip #
+flips a 50/50 coin.
+Win: gives # of coins to user
+Lose: removes # of coins to user
+
+
+Slots
+!>slots #
+pulls from 6 fruit emojis, if all 3 match, payout is 1:36
+
+Roulette Wheel
+!>roulette [bet_type] [bet_option] [bet_amount]
+OR 
+!>wheel [bet_type] [bet_option] [bet_amount]
+spins a roulette wheel
+[bet_type] is either "color" or "number"
+[bet_option] (if color): red or black     : (if number): 0-36
+[bet_amount] # of coins you want to gamble
+
+# ----- Blackjack
+Blackjack is a multiplayer game of users vs dealer (bot)
+uses an 8 deck shoe that gets shuffled when halfway through the shoe
+
+Join
+!>join
+will add you to queue for next game
+
+Leave
+!>leave
+Removes you from the queue
+
+Blackjack start game
+!>blackjack
+this will ask the users how much they want to bet and wait for response (30 sec)
+it will then show you the start of the game and ask you to react to hit or stand
+The goal is to have a better hand than the dealer. (closest to 21 without going over)
+once game ends, the queue will be added and !>blackjack will start with new players and those that did not !>leave
+
+
+
+# --------------------------------------- Voice Chat commands ----------------------------------------
+
+Join / Leave VC (toggleable)
+!>vc
+will join or remove the bot from your current voice channel
+YOU MUST BE IN A CHANNEL TO USE THIS
+
+Dog Clicker
+!>click
+bot will "speak" the audio file of a dog clicker in the vc
+
+Discord Ping (Mod Only)
+!>ping
+bot will "speak" the audio file of the discord ping sound in the vc
+
+Windows Notification (Mod Only)
+!>windows
+bot will "speak" the audio file of the windows notification sound in the vc
+
+iPhone Alarm (Mod Only)
+!>iPhone
+bot will "speak" the audio file of the iPhone alarm sound in the vc (torture)
+
+TTS
+!>speak "Text"
+bot will speak "Text" given to it on command in the vc
+
+
+
+# ------------------ Mod Abuse VC ------------------------------
+Mute
+!>mute @user
+constantly (every 2 seconds) changes @user from server mute to talking
+
+Deafen
+!>deafen @user
+constantly (every 2 seconds) changes @user from server deafen to listening
+
+
+
+
+# ------------------------------- Misc / QOL commands ----------------------
+
+Who is (lookup)
+!>whois #
+# is a persons discord user id
+returns the account, age, in server check
+
+Timer
+!>timer "Name"
+starts a timer for the author called "Name"
+
+View Timer
+!>timers
+shows all timers for author
+
+Stop Timer
+!>stoptimer "Name"
+stops the timer and shows total time
+
+
+
+
+
+
+# ------------------------------- MOD ONLY --------------------------------
+
+Allow (toggleable)
+!>allow @user
+OR
+!>bypass @user
+allows the user to type in channel where this command is sent
+while the user is on this list all their messages in said channel will bypass bot
+
+Untimeout
+!>untimeout @user
+sets user timeout to 1 second so they are untimeout
+
+Close Thread
+!>close
+use in thread you want to close
+marks as archived and locked
+normally used to fix solitary cells that are empty
+
+Restart
+!>restart
+restarts the bot. used when updating DB table or it gets hung on like a line writing or smth
+
+Shutdown
+!>shutdown
+shutdown the bot. requires frshwtr to start the bot again
+
+Command Logs
+!>command_logs
+Shows the last 10 commands used, with users and arguments
+
+
+
+
+
+
