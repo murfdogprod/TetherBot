@@ -1,12 +1,12 @@
 # -------------------------- SETUP / USER ONLY COMMANDS -----------------
-Settings
+Enforcement
     """
     Manage your enforcement actions.
     Usage:
-      !>settings                - Show your current settings
-      !>settings add gag        - Add an action
-      !>settings remove timeout - Remove an action
-      !>settings help           - Show help
+      !>enforcement                - Show your current settings
+      !>enforcement add gag        - Add an action
+      !>enforcement remove timeout - Remove an action
+      !>enforcement help           - Show help
     """
 
 Auth
@@ -48,7 +48,7 @@ shows the list of enforced words for a user
 # -------------------------- RESTRICTING ACTIONS ------------------------
 Enforce
     """Force a user to include specific words in their messages
-    Usage: !>enforced @user "required_word" [initial_time] [added_time]"""
+    Usage: !>enforce @user "required_word" [initial_time] [added_time]"""
 Requires User to use word in every message they send. 
 if they violate, they get timed out for initial_time and add added_time for each additional offense
 
@@ -242,6 +242,18 @@ once game ends, the queue will be added and !>blackjack will start with new play
 
 
 
+
+# --------------------------------------- COUNTING ---------------------------------------------------
+Place
+!>place #
+where # is the amount of petbucks you would like to add to the pot. if counting is successful, all prisoners are awarded freedom for #*2 seconds
+
+Start Counting
+!>startcount
+Use in Prison Channel and will start the counting game. The counting will start at 1 and end at 100. You cannot send multiple numbers in a row. You fail when someone types something other than the wrong number
+Gag and banned words will not be enforced in prison while a counting game is occuring
+
+
 # --------------------------------------- Voice Chat commands ----------------------------------------
 
 Join / Leave VC (toggleable)
@@ -333,6 +345,10 @@ restarts the bot. used when updating DB table or it gets hung on like a line wri
 Shutdown
 !>shutdown
 shutdown the bot. requires frshwtr to start the bot again
+
+Pause (Toggleable)
+!>pause
+Pauses the bot until !>pause is run again
 
 Command Logs
 !>command_logs
