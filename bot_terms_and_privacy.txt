@@ -1,0 +1,55 @@
+
+⚖️ TERMS OF SERVICE
+
+Effective Date: June 20, 2025
+
+By using this bot ("the Bot") in your Discord server, you agree to the following terms:
+
+1. Use of the Bot
+- You must comply with Discord's Terms of Service (https://discord.com/terms) and Community Guidelines (https://discord.com/guidelines).
+- The Bot is provided "as is" without warranty of any kind.
+- We reserve the right to change, suspend, or remove the Bot or any features at any time without notice.
+
+2. User Conduct
+- You agree not to abuse, exploit, or misuse the Bot, including but not limited to spamming, cheating, or attempting to bypass restrictions.
+- Any attempt to disrupt or damage the Bot’s functionality may result in a ban or removal from servers.
+
+3. Limitation of Liability
+- We are not liable for any loss, damage, or disruption caused by your use of the Bot.
+- Use of features such as economy, gambling, or moderation systems is at your own discretion.
+
+
+🔒 PRIVACY POLICY
+
+Effective Date: June 20, 2025
+
+This policy outlines what data the Bot collects and how it's used.
+
+1. What Data We Collect
+The Bot may collect and temporarily store the following:
+- Discord User IDs, server IDs, message IDs, and usernames (for tracking participation, moderation, or game history)
+- Game and economy data (e.g. scores, balances, bets)
+- Role and permission configurations (to enforce command restrictions)
+- Error logs and crash reports (for debugging purposes)
+
+2. How We Use Your Data
+- To provide core functionality (e.g. game states, moderation enforcement)
+- To store temporary session or command history
+- To maintain server-specific settings
+- For debugging and bot improvement
+
+3. Data Sharing
+- We do not share your data with third parties.
+- Server admins may access data relevant to their server (e.g., logs, game stats).
+
+4. Data Retention
+- Temporary data (e.g., game sessions, economy logs) may be stored for up to 30 days.
+- Persistent settings and economy data remain until deleted manually by an admin or on request.
+
+5. Your Rights
+- You may request deletion of your data by contacting the bot owner or server admin.
+- You may stop using the Bot at any time.
+
+
+📬 Contact
+If you have questions or concerns about this policy, please reach out to the bot owner directly via Discord.
