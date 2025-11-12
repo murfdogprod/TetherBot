@@ -42,6 +42,7 @@ silent_executions = set()
 pending_silent_commands = {}  # key = user_id, value = (command_name, run_as_user_id)
 # In your shared.py or similar
 running_silent_command = False
+silent_command_running = False
 
 
 
@@ -282,6 +283,13 @@ def initialize_server_db(conn: sqlite3.Connection):
         PRIMARY KEY (guild_id, user_id)
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS word_length_limits (
+            user_id INTEGER,
+            min_length INTEGER DEFAULT 0,
+            max_length INTEGER DEFAULT 0
+        )
+    ''')
 
 
 
@@ -466,6 +474,10 @@ locked_users = PerGuildDict(lambda: set())
 user_pishock_codes = PerGuildDict(dict)
 double_type_users = PerGuildDict(lambda: set())
 pending_confirm = PerGuildDict(dict)
+prefix = PerGuildDict(dict)
+word_length_limits = PerGuildDict(dict)
+
+
 
 current_number = PerGuildDict(lambda: 0)
 last_user = PerGuildDict(lambda: None)
@@ -513,6 +525,10 @@ def ensure_cog_columns_from_files():
         # Get current columns
         cur.execute("PRAGMA table_info(server_config)")
         existing_columns = [row[1] for row in cur.fetchall()]
+
+        if "prefix" not in existing_columns:
+            cur.execute("ALTER TABLE server_config ADD COLUMN prefix TEXT DEFAULT '!'")
+            print("✅ Added column 'prefix' to server_config")
 
         for cog in toggleable_cogs:
             column_name = f"{cog}_enabled"
