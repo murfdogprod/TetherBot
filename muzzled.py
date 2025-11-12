@@ -22,8 +22,8 @@ from collections import deque
 
 import discord
 from discord.ext import commands, tasks
-from discord.ui import View, Button
-from discord import Option
+from discord.ui import View, Button, Select
+from discord import Option, Message
 from discord.commands import context
 from dotenv import load_dotenv
 from gtts import gTTS
@@ -44,8 +44,8 @@ from discord.commands.context import AutocompleteContext
 
 
 
-Version_Number = "1.10.6"
-Version_Notes = "added prison cleanup to prison status"
+Version_Number = "2.3.1"
+Version_Notes = "ping update"
 # Main version / subversion / patch
 
 ARCHIVE_DIR = "archive"
@@ -111,6 +111,37 @@ def get_available_databases(bot):
 async def database_autocomplete(ctx: discord.AutocompleteContext):
     databases = get_available_databases(ctx.interaction.client)
     return list(databases.keys())[:25]  # Discord limits choices to 25
+
+
+def ensure_prefix_column():
+    try:
+        shared.c.execute("PRAGMA table_info(server_config)")
+        existing_columns = [row[1] for row in shared.c.fetchall()]
+
+        if "prefix" not in existing_columns:
+            shared.c.execute("ALTER TABLE server_config ADD COLUMN prefix TEXT DEFAULT '!>'")
+            shared.conn.commit()
+            print("✅ Added 'prefix' column to server_config")
+    except Exception as e:
+        print(f"[ensure_prefix_column] Error: {e}")
+
+
+
+async def load_prefixes():
+    shared.prefixes = {}  # Make sure this dict exists
+
+    shared.c.execute("SELECT guild_id, prefix FROM server_config")
+    rows = shared.c.fetchall()
+
+    for guild_id, prefix in rows:
+        shared.prefixes[guild_id] = prefix or "!>"  # default prefix if null
+
+def get_prefix(bot, message):
+    if not message.guild:
+        return "!>"
+    return shared.prefixes.get(message.guild.id, "!>")
+    
+bot = commands.Bot(command_prefix=get_prefix, intents=discord.Intents.all())
 
 
 class DiscordLogger:
@@ -234,7 +265,8 @@ TABLE_COLUMNS = {
     "solitary_pings": ["thread_id", "last_ping"],
     "bot_status": ["id", "restart_status"],
     "pot": ["id", "pot"],
-    "command_bans": ["user_id"]
+    "command_bans": ["user_id"],
+    "word_length_limits": ["user_id", "min_length", "max_length"]
 }
 
 async def table_autocomplete(ctx: AutocompleteContext):
@@ -290,7 +322,7 @@ def is_bot_owner():
 
 
 
-Mod = {1146469921270792326, 169981533187211264, 964573737477341235, 927628071706689636, 186523925264465920, 754523779887136799, 549181719362928643}
+Mod = {1146469921270792326, 169981533187211264, 964573737477341235, 927628071706689636, 186523925264465920, 754523779887136799}
 additional_lock_managers = {
     380625660277948426  # Another one
 }
@@ -423,13 +455,7 @@ freedom_pot = 0
 COMMAND_LIMIT = 5
 TIME_WINDOW = 10  # seconds
 
-special_guilds = {1238659711776325652, 1380263665231728641}
 
-# Define your prefix function
-async def get_prefix(bot, message):
-    if message.guild and message.guild.id in special_guilds:
-        return "$"
-    return "!>"
 
 # ------------------- Bot Setup -------------------
 intents = discord.Intents.default()
@@ -445,6 +471,20 @@ bot = commands.Bot(
     case_insensitive=True
 )
 
+
+# Save the original method
+original_add_reaction = Message.add_reaction
+
+# Monkey-patch with the silent check
+async def patched_add_reaction(self, emoji):
+    try:
+        if not shared.silent_command_running:
+            return await original_add_reaction(self, emoji)
+    except Exception as e:
+        print(f"Failed to add reaction: {e}")
+    return None
+
+Message.add_reaction = patched_add_reaction
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -497,6 +537,8 @@ async def on_ready():
     shared.c.execute("SELECT restart_status FROM bot_status WHERE id = 1")
     restart_status = shared.c.fetchone()
 
+
+    ensure_prefix_column()
     # Send online status if not a restart
     if not (restart_status and restart_status[0] == "restarting"):
         new_channel_name = "✅bot-online"
@@ -529,10 +571,14 @@ async def on_ready():
     # Ensure server_config columns exist
     ensure_cog_columns_from_files()
 
+
+    await load_prefixes()
+
+
     if not process_command_logs.is_running():
         process_command_logs.start()
 
-
+    
 
 
     # --- Load per-guild memory state ---
@@ -604,6 +650,14 @@ async def on_ready():
         cur.execute("SELECT user_id FROM ignored_users")
         for row in cur.fetchall():
             shared.ignored_users[guild_id].add(row[0])
+        
+        cur.execute("SELECT user_id, min_length, max_length FROM word_length_limits")
+        for row in cur.fetchall():
+            user_id, min_length, max_length = row
+            shared.word_length_limits[guild_id][user_id] = {
+                "min_length": min_length,
+                "max_length": max_length
+            }
 
         # Line writing sessions
         cur.execute("SELECT user_id, line, lines_required, lines_written FROM active_line_writers")
@@ -674,6 +728,16 @@ async def on_ready():
     print("✅ on_ready complete.")
 
 
+@bot.event
+async def on_typing(channel, user, when):
+    # Replace with your actual IDs
+    '''
+    target_user_id = 927628071706689636
+
+    # Check user and guild match
+    if user.id == target_user_id and channel.guild and channel.guild.id == TEST_SERVER_ID:
+        await channel.send(f"{user.mention} I see you typing... 👀", delete_after=5)
+    '''
 
 @bot.event
 async def on_message_edit(before, after):
@@ -711,6 +775,7 @@ async def on_message_or_edit(message, edited: bool = False):
                         await message.author.send(
                             f"⚠️ No configuration found for **{message.guild.name}**.\n"
                             f"Please use `/setup_ids` in your server to set the required channels and roles."
+                            f"Also join the support server for more information and help setting up this bot. https://discord.gg/zeESfuRMf8"
                         )
                     except discord.Forbidden:
                         # User has DMs off or blocked the bot
@@ -763,6 +828,7 @@ async def on_message_or_edit(message, edited: bool = False):
                 run_as, silent_cmd = shared.pending_silent_commands[key]
 
                 if message.guild and message.guild.id == key[0]:
+                    run_as = message.author
                     original_author = message.author
                     original_content = message.content
 
@@ -941,10 +1007,8 @@ async def on_message_or_edit(message, edited: bool = False):
         alt_server_command = False
 
         user_id = message.author.id
-        is_command = message.content.startswith("!>")
-        if guild_id in special_guilds:
-            is_command = message.content.startswith("$")
-            alt_server_command = True
+        prefix = get_prefix(bot, message)  # call your prefix function properly
+        is_command = message.content.startswith(prefix)
         content = message.content.lower()
         con_line = message.content.strip()
         channel_id = message.channel.id
@@ -964,7 +1028,7 @@ async def on_message_or_edit(message, edited: bool = False):
         # Check for media content
         has_media = message.attachments or message.stickers
 
-        if message.content.startswith("!>") and alt_server_command:
+        if message.content.startswith("!>") and prefix != "!>":
             return
 
         if not forced_filtered and (bypass_triggers or has_media):
@@ -982,7 +1046,8 @@ async def on_message_or_edit(message, edited: bool = False):
         if (
             message.guild and 
             message.guild.id == TEST_SERVER_ID and 
-            message.author.id == 927628071706689636
+            message.author.id == 927628071706689636 and
+            False
         ):
             await message.add_reaction("⬆️")
             await message.add_reaction("<:goofy:1367975113835810816>")
@@ -996,7 +1061,8 @@ async def on_message_or_edit(message, edited: bool = False):
             is_command and 
             message.guild and 
             message.guild.id == TEST_SERVER_ID and 
-            message.author.id == 927628071706689636
+            message.author.id == 927628071706689636 and
+            False
         ):
             await asyncio.sleep(14)
 
@@ -1254,7 +1320,7 @@ async def on_message_or_edit(message, edited: bool = False):
                         else:
                             mp3_file_path = "non-suspicious sound.mp3"
                             if os.path.exists(mp3_file_path):
-                                await message.channel.send(file=discord.File(mp3_file_path))
+                                await message.channel.send(file=discord.File(mp3_file_path), delete_after = 10)
 
                 else:
                     lines_required += penalty
@@ -1523,6 +1589,43 @@ async def on_message_or_edit(message, edited: bool = False):
                     await message.channel.send(warning, delete_after=120)
             
                 return
+            
+        # ---------- WORD LENGTH LIMIT CHECK ----------
+        if not is_command and user_id in shared.word_length_limits[guild_id]:
+            limit_data = shared.word_length_limits[guild_id][user_id]
+            min_len = limit_data.get("min_length", 0)
+            max_len = limit_data.get("max_length", 0)
+
+            # Skip check if nothing enforced
+            if min_len > 0 or max_len > 0:
+                words = [w.strip(string.punctuation) for w in content.split()]
+                for w in words:
+                    lw = len(w)
+                    if (min_len > 0 and lw < min_len) or (max_len > 0 and lw > max_len):
+                        try:
+                            await message.delete()
+                        except discord.NotFound:
+                            pass
+                        except discord.Forbidden:
+                            # Prevent log spam if missing perms
+                            print(f"[WordLength] Missing permission to delete message in {message.channel}")
+                        except Exception as e:
+                            print(f"[WordLength] Delete failed: {e}")
+
+                        # Format clearer message
+                        limit_text = []
+                        if min_len > 0:
+                            limit_text.append(f"≥ {min_len}")
+                        if max_len > 0:
+                            limit_text.append(f"≤ {max_len}")
+                        rule_text = " and ".join(limit_text)
+
+                        await message.channel.send(
+                            f"{message.author.mention} ❌ Invalid word length! "
+                            f"Each word must be {rule_text} characters long.",
+                            delete_after=8
+                        )
+                        return
 
 
 
@@ -2304,7 +2407,7 @@ async def nonbypass_slash(
     target = user or ctx.author
     user_id = target.id
     guild_id = ctx.guild.id
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     # Auth check
     if not await check_auth(ctx, target):
@@ -2336,14 +2439,15 @@ async def discord_ping_slash(
     interval: Option(float, "How often to ping (in minutes)"),
     duration: Option(float, "Total time to ping for (in minutes)"),
     user: Option(discord.Member, "User to ping repeatedly", required=False),
-    role: Option(discord.Role, "Role to ping repeatedly", required=False)
+    role: Option(discord.Role, "Role to ping repeatedly", required=False),
+    start_delay: Option(float, "Delay before starting pings (in seconds)", required=False, default=0)
 ):
     if (not user and not role) or (user and role):
         await ctx.respond("❌ You must specify *either* a user *or* a role (not both).", ephemeral=True)
         return
 
-    if interval < 0.1 or duration <= 0:
-        await ctx.respond("❌ Interval must be at least 0.1 minutes (6 seconds), and duration must be positive.", ephemeral=True)
+    if interval < 0.1 or duration <= 0 or start_delay < 0:
+        await ctx.respond("❌ Interval and start delay must be non-negative, duration must be positive.", ephemeral=True)
         return
 
     if abs((duration / interval) - round(duration / interval)) > 1e-6:
@@ -2358,8 +2462,10 @@ async def discord_ping_slash(
     if guild_id not in shared.active_pings:
         shared.active_pings[guild_id] = {}
 
+    if user and user.id == 1362072119844016258:  # bot ID
+        user = ctx.author
+
     target_id = user.id if user else role.id
-    target_type = "user" if user else "role"
     target_mention = user.mention if user else role.mention
 
     if target_id in shared.active_pings[guild_id]:
@@ -2367,14 +2473,17 @@ async def discord_ping_slash(
         return
 
     await ctx.respond(
-        f"✅ Pinging {target_mention} every {interval} minute(s) for {duration} minute(s).", ephemeral=True
+        f"✅ Will start pinging {target_mention} in {start_delay} seconds(s), then every {interval} minute(s) for {duration} minute(s).",
+        ephemeral=True
     )
 
     async def ping_loop():
         try:
+            if start_delay > 0:
+                await asyncio.sleep(start_delay)  # delay before starting
             end_time = discord.utils.utcnow().timestamp() + duration * 60
             while discord.utils.utcnow().timestamp() < end_time:
-                await channel.send(f"{target_mention} ⏰ Ping!")
+                await channel.send(f"Ping! ||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||​||||||| {target_mention}")
                 await asyncio.sleep(interval * 60)
         except asyncio.CancelledError:
             await channel.send(f"🛑 Stopped pinging {target_mention}.")
@@ -2383,8 +2492,6 @@ async def discord_ping_slash(
 
     task = bot.loop.create_task(ping_loop())
     shared.active_pings[guild_id][target_id] = task
-
-
 
 
 @bot.slash_command(name="stop_ping", description="Stop pinging a user or role early.")
@@ -3249,6 +3356,129 @@ async def assign_lines(ctx, user: discord.Member = None, lines: str = None, *, a
         await ctx.send(f"❌ Failed to assign lines: {e}")
 
 
+@bot.slash_command(name="lines", description="Assign or check line-writing punishment.")
+@with_config
+async def assign_lines_slash(
+    ctx,
+    user: Option(discord.Member, "The user to assign lines to", required=False, default=None),
+    lines: Option(int, "Number of lines to write", required=False, default=None),
+    line_text: Option(str, "The text to be written", required=False, default=None),
+    penalty: Option(int, "Penalty lines for mistakes", required=False, default=0),
+    assignment_id: Option(int, "Assignment ID to clear", required=False, default=None),
+):
+    c = ctx.server_db.cursor()
+    guild_id = ctx.guild.id
+    config = unpack_config(ctx)
+    LINE_WRITING_ID = config[1]  # Index 1 is LINE_WRITING_ID
+    
+    # Case 1: Clear assignment
+    if assignment_id is not None:
+        target = user or ctx.author
+        c.execute("""
+            SELECT assigned_by 
+            FROM line_assignments 
+            WHERE assignment_id = ? AND user_id = ?
+            UNION
+            SELECT assigned_by 
+            FROM active_line_writers 
+            WHERE assignment_id = ? AND user_id = ?
+        """, (assignment_id, target.id, assignment_id, target.id))
+        result = c.fetchone()
+
+        if not result:
+            await ctx.respond("❌ No such assignment found.", ephemeral=True)
+            return
+
+        assigned_by = result[0]
+        is_mod = await is_user_server_mod(ctx.bot, guild_id, ctx.author.id)
+        
+        if ctx.author.id != assigned_by and not is_mod:
+            await ctx.respond(
+                "❌ You can only clear lines you assigned, unless you are a bot Mod.",
+                ephemeral=True
+            )
+            return
+
+        c.execute("DELETE FROM line_assignments WHERE assignment_id = ?", (assignment_id,))
+        c.execute("DELETE FROM active_line_writers WHERE assignment_id = ?", (assignment_id,))
+        ctx.server_db.commit()
+
+        # Clear from shared sessions if exists
+        shared.line_writing_sessions[guild_id].pop(target.id, None)
+        await ctx.respond(f"✅ Cleared line assignment with ID {assignment_id} for {target.mention}.")
+        return
+
+    # Case 2: Assign new lines
+    if lines is not None and line_text is not None:
+        target = user or ctx.author
+        
+        if not await check_auth(ctx, target):
+            await ctx.respond("❌ You are not authorized to assign lines.", ephemeral=True)
+            return
+
+        # Validate line text
+        invalid_reason = await is_invalid_line_text(line_text)
+        if invalid_reason:
+            await ctx.respond(f"❌ Invalid line: {invalid_reason}", ephemeral=True)
+            return
+        
+        # Check for non-printable characters
+        cleaned_text = ''.join(c for c in line_text if c in string.printable)
+        if cleaned_text != line_text:
+            await ctx.respond(
+                "❌ Don't use non-printable characters in the line text.\n"
+                f"Clean text: {cleaned_text}",
+                ephemeral=True
+            )
+            return
+
+        # Create new assignment
+        try:
+            c.execute("""
+                INSERT INTO line_assignments (
+                    user_id, line, lines_required, penalty_lines, assigned_by
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (target.id, cleaned_text, lines, penalty, ctx.author.id))
+            ctx.server_db.commit()
+            
+            assignment_id = c.lastrowid
+            writing_channel = ctx.guild.get_channel(LINE_WRITING_ID)
+            
+            if not writing_channel:
+                await ctx.respond(
+                    "❌ The designated line writing channel does not exist or is not accessible.",
+                    ephemeral=True
+                )
+                return
+
+            await writing_channel.send(
+                f"✍️ {target.mention} has been assigned to write: **{cleaned_text}**\n"
+                f"**{lines} times**. Penalty for mistakes: **+{penalty}** lines.\n"
+                f"Use '!>start {assignment_id}' to begin! Remember don't speak anywhere else until done!"
+            )
+            await ctx.respond("✅ Lines assigned successfully!", ephemeral=True)
+            
+        except Exception as e:
+            await ctx.respond(f"❌ Failed to assign lines: {e}", ephemeral=True)
+        return
+
+    # Case 3: Check progress (default action)
+    target = user or ctx.author
+    c.execute("""
+        SELECT line, lines_required, lines_written 
+        FROM active_line_writers 
+        WHERE user_id = ?
+    """, (target.id,))
+    result = c.fetchone()
+
+    if result:
+        line_text, lines_left, lines_written = result
+        await ctx.respond(
+            f"📝 {target.mention}'s progress: **{lines_written}/{lines_left}** lines written.\n"
+            f"Line: \"{line_text}\""
+        )
+    else:
+        await ctx.respond(f"✅ {target.mention} doesn't have any active line assignments.")
 
 @bot.command()
 @with_config
@@ -3837,7 +4067,7 @@ async def daily(ctx):
         if streak_days <= 40:
             reward = 50 + (streak_days - 1) * 5
         else:
-            reward = 50 + (39 * 5) + (streak_days - 40) * 2
+            reward = 50 + (39 * 5)
 
         # Update or insert into user_wallets
         c.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
@@ -4276,8 +4506,8 @@ async def blackjack(ctx):
             shared.current_bets[guild_id][player] = 0
 
     deck = shuffle_deck()
-    player_hands = {player: [deck.pop(), deck.pop()] for player in shared.players[guild_id]}
-    dealer_hand = [deck.pop(), deck.pop()]
+    player_hands = {player: [draw_card(deck), draw_card(deck)] for player in shared.players[guild_id]}
+    dealer_hand = [draw_card(deck), draw_card(deck)]
 
     for hand in player_hands.values():
         for card in hand:
@@ -4326,7 +4556,7 @@ async def blackjack(ctx):
         if hitters:
             hit_embed = discord.Embed(title="😤 Players Drawing Cards", color=0xe74c3c)
             for hitter in hitters:
-                new_card = deck.pop()
+                new_card = draw_card(deck)
                 player_hands[hitter].append(new_card)
                 update_running_count(new_card)
                 total = calculate_hand(player_hands[hitter])
@@ -4347,7 +4577,7 @@ async def blackjack(ctx):
     while True:
         if dealer_total >= 17 or dealer_total > highest_player_total:
             break
-        new_card = deck.pop()
+        new_card = draw_card(deck)
         dealer_hand.append(new_card)
         update_running_count(new_card)
         dealer_total = calculate_hand(dealer_hand)
@@ -4415,9 +4645,13 @@ def shuffle_deck():
 
 def draw_card(deck):
     global remaining_cards
-    card = deck.pop()  # Draw the top card from the deck
-    remaining_cards -= 1  # Decrease the number of remaining cards
+    if not deck:
+        deck.extend(shuffle_deck())
+        remaining_cards = len(deck)
+    card = deck.pop()
+    remaining_cards -= 1
     return card
+
 
 def calculate_hand(hand):
     total = 0
@@ -5289,13 +5523,13 @@ async def status_prefix(ctx, user: discord.Member = None):
     # Enforced words
     if enforced:
         enforced_list = sorted(enforced)
-        enforced_str = ' '.join(f'`{w}`' for w in enforced_list)
+        enforced_str = ',  '.join(f'`{w}`' for w in enforced_list)
         word_controls.append(f"⛔ **Enforced Words**\n{enforced_str}")
     
     # Banned words
     if banned:
         banned_list = sorted(banned)
-        banned_str = ' '.join(f'`{w}`' for w in banned_list)
+        banned_str = ',  '.join(f'`{w}`' for w in banned_list)
         word_controls.append(f"🚫 **Banned Words**\n{banned_str}")
     
     # ⚙️ Enforcement settings (only show if there are words)
@@ -5408,11 +5642,11 @@ async def status_slash(
         word_controls.append(f"⏱️ **Cooldown:** 🔴 {cooldown}s")
 
     if enforced:
-        enforced_str = ' '.join(f'`{w}`' for w in sorted(enforced))
+        enforced_str = ',  '.join(f'`{w}`' for w in sorted(enforced))
         word_controls.append(f"⛔ **Enforced Words**\n{enforced_str}")
 
     if banned:
-        banned_str = ' '.join(f'`{w}`' for w in sorted(banned))
+        banned_str = ',  '.join(f'`{w}`' for w in sorted(banned))
         word_controls.append(f"🚫 **Banned Words**\n{banned_str}")
 
     if has_words:
@@ -5597,7 +5831,7 @@ async def nuke_slash(
     seconds: Option(int, "Number of seconds to timeout (max 2419200)", min_value=1, max_value=2419200)
 ):
     """Timeout a user for a custom duration (in seconds)."""
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     try:
         timeout_until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
@@ -6066,7 +6300,7 @@ async def doubletype_command(ctx, user: discord.Member = None):
 @with_config
 async def doubletype_slash(ctx, user: discord.Member = None):
     c = ctx.server_db.cursor()
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
     target = user or ctx.author
     if target.id in shared.locked_users[ctx.guild.id] and ctx.author.id not in AUTHORIZED_LOCK_MANAGERS:
         await ctx.respond("❌ The target is currently locked and cannot be changed.", ephemeral=True)
@@ -6445,7 +6679,7 @@ async def change_nickname_slash(
     new_nickname: str,
 ):
     """Slash command to change a member's nickname."""
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     try:
         await member.edit(nick=new_nickname)
@@ -7647,7 +7881,7 @@ async def auth(
     c = ctx.server_db.cursor()
     valid_modes = ["ask", "public", "exposed", "off"]
     mode = mode.lower()
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
     if mode not in valid_modes:
         await ctx.respond("❌ Invalid mode selected.", ephemeral=True)
         return
@@ -7667,7 +7901,7 @@ async def solitary(
     action: Option(str, "Add or remove", choices=["add", "remove"], required=False) = None
 ):
     c = ctx.server_db.cursor()
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
     (
         PRISON_CHANNEL_ID,
         LINE_WRITING_ID,
@@ -7802,7 +8036,7 @@ async def prison(
 ):
     c = ctx.server_db.cursor()
     target = user or ctx.author
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     if target.id in shared.locked_users[ctx.guild.id] and ctx.author.id not in AUTHORIZED_LOCK_MANAGERS:
         await ctx.respond("❌ The target is currently locked and cannot be modified.", ephemeral=True)
@@ -7884,7 +8118,7 @@ async def lockdown(
     channel: Option(discord.TextChannel, "Channel to restrict them to")
 ):
     c = ctx.server_db.cursor()
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     guild = ctx.guild
     target = member
@@ -7939,7 +8173,7 @@ async def unlockdown(
     member: Option(discord.Member, "User to unlock")
 ):
     c = ctx.server_db.cursor()
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     guild = ctx.guild
     target = member
@@ -7979,7 +8213,7 @@ async def enforce(
     added_time: Option(int, "Extra timeout added per repeated violation", required=False, default=30),
 ):
     c = ctx.server_db.cursor()
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
     word = phrase.strip().lower()
     target = user or ctx.author
     guild_id = ctx.guild.id
@@ -8049,7 +8283,7 @@ async def unenforce(
     word = phrase.strip().lower()
     target = user or ctx.author
     guild_id = ctx.guild.id
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
 
     # Locked check
@@ -8092,6 +8326,91 @@ async def unenforce(
         )
         await ctx.respond("❌ An error occurred while removing the enforced word.", ephemeral=True)
 
+# ------------------- Word Length Commands -------------------
+
+
+@bot.slash_command(
+    name="wordlength",
+    description="Set a minimum or maximum character length per word for a user"
+)
+@with_config
+async def wordlength(
+    ctx,
+    user: discord.Member,
+    mode: Option(str, "Choose mode", choices=["min", "max"]),
+    length: Option(int, "Character length (e.g., 5)")
+):
+    """Set min or max word length restriction per user"""
+    c = ctx.server_db.cursor()
+    guild_id = ctx.guild.id
+
+    # ✅ Create the table automatically if missing
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS word_length_limits (
+            user_id INTEGER,
+            min_length INTEGER DEFAULT 0,
+            max_length INTEGER DEFAULT 0
+        )
+    """)
+
+    # Lock and permission checks
+    if user.id in shared.locked_users[guild_id] and ctx.author.id not in AUTHORIZED_LOCK_MANAGERS:
+        await ctx.respond("❌ That user is locked.", ephemeral=True)
+        return
+
+    if not await check_auth(ctx, user):
+        await ctx.respond("❌ Permission denied.", ephemeral=True)
+        return
+
+    # Get current values if any
+    c.execute("SELECT min_length, max_length FROM word_length_limits WHERE user_id = ?", (user.id,))
+    row = c.fetchone()
+    min_len, max_len = row if row else (0, 0)
+
+    # Update appropriate field
+    if mode == "min":
+        min_len = length
+    else:
+        max_len = length
+
+    c.execute(
+        "INSERT OR REPLACE INTO word_length_limits (user_id, min_length, max_length) VALUES (?, ?, ?)",
+        (user.id, min_len, max_len)
+    )
+    ctx.server_db.commit()
+    shared.word_length_limits[guild_id][user.id] = {"min_length": min_len, "max_length": max_len}
+
+
+    await ctx.respond(
+        f"✅ Set {mode} word length for {user.mention} to `{length}` characters.",
+        ephemeral=True
+    )
+
+
+@bot.slash_command(
+    name="wordlength_remove",
+    description="Remove all word length restrictions for a user"
+)
+@with_config
+async def wordlength_remove(ctx, user: discord.Member):
+    c = ctx.server_db.cursor()
+
+    # ✅ Create table if missing (safe redundancy)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS word_length_limits (
+            user_id INTEGER,
+            min_length INTEGER DEFAULT 0,
+            max_length INTEGER DEFAULT 0
+        )
+    """)
+
+    c.execute("DELETE FROM word_length_limits WHERE user_id = ?", (user.id,))
+    ctx.server_db.commit()
+    shared.word_length_limits[guild_id].pop(user.id, None)
+
+
+    await ctx.respond(f"✅ Removed all word length restrictions for {user.mention}.", ephemeral=True)
+
 
 @bot.slash_command(name="ban_word", description="Ban a user from using a specific word or phrase.")
 @with_config
@@ -8107,7 +8426,7 @@ async def ban_word(
     target = user or ctx.author
     guild_id = ctx.guild.id
 
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     # Basic phrase validation
     if not word:
@@ -8174,7 +8493,7 @@ async def unban(
     word = phrase.strip().lower()
     target = user or ctx.author
     guild_id = ctx.guild.id
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     # Check if the user is locked and caller isn't authorized
     if target.id in shared.locked_users[guild_id] and ctx.author.id not in AUTHORIZED_LOCK_MANAGERS:
@@ -8316,7 +8635,7 @@ async def daily(ctx):
         claim_count = 0
         streak_days = 1
 
-    reward = 50 + (streak_days - 1) * 5 if streak_days <= 40 else 50 + 39 * 5 + (streak_days - 40) * 2
+    reward = 50 + (streak_days - 1) * 5 if streak_days <= 40 else 50 + 39 * 5
     update_balance(user_id, reward, c)
 
     c.execute(
@@ -8563,7 +8882,7 @@ async def add_slash(ctx, user: discord.Member, amount: int):
     c = ctx.server_db.cursor()
 
 
-    if amount <= 0:
+    if amount <= -10000000000000000000000000000000000000:
         await ctx.respond("❌ You must specify a positive amount of pet bucks to add.")
         return
 
@@ -8829,7 +9148,7 @@ async def blackjack_slash(ctx: discord.ApplicationContext):
         LOG_CHANNEL_ID
     ) = unpack_config(ctx)
     guild_id = ctx.guild.id
-    await ctx.defer()
+    await ctx.defer(ephemeral=True)
 
     # Cancel any pending join timeout
     if shared.pending_blackjack_timeout[guild_id]:
@@ -8875,8 +9194,8 @@ async def blackjack_slash(ctx: discord.ApplicationContext):
 
     # Game setup
     deck = shuffle_deck()
-    player_hands = {player: [deck.pop(), deck.pop()] for player in shared.players[guild_id]}
-    dealer_hand = [deck.pop(), deck.pop()]
+    player_hands = {player: [draw_card(deck), draw_card(deck)] for player in shared.players[guild_id]}
+    dealer_hand = [draw_card(deck), draw_card(deck)]
 
     for hand in player_hands.values():
         for card in hand:
@@ -8945,7 +9264,7 @@ async def blackjack_slash(ctx: discord.ApplicationContext):
         if hitters:
             hit_embed = discord.Embed(title="📤 Players Drawing Cards", color=0xe74c3c)
             for hitter in hitters:
-                new_card = deck.pop()
+                new_card = draw_card(deck)
                 player_hands[hitter].append(new_card)
                 update_running_count(new_card)
 
@@ -8978,7 +9297,7 @@ async def blackjack_slash(ctx: discord.ApplicationContext):
     while True:
         if dealer_total >= 17 or dealer_total > highest_player_total:
             break
-        new_card = deck.pop()
+        new_card = draw_card(deck)
         dealer_hand.append(new_card)
         update_running_count(new_card)
         dealer_total = calculate_hand(dealer_hand)
@@ -9053,6 +9372,10 @@ async def global_command_limit(ctx):
     if ctx.author.bot:
         return False
 
+    if ctx.guild is None:
+        await ctx.respond("This command cannot be used in DMs.", ephemeral=True)
+        return False
+
     user_id = ctx.author.id
     now = time.time()
     guild_id = ctx.guild.id
@@ -9100,7 +9423,7 @@ shared.check_auth = check_auth
 
 from discord import Interaction
 from discord import SelectOption
-from discord.ui import View, Select
+
 
 skip_cog = {""}
 
@@ -9507,7 +9830,6 @@ Here's how to get started:
 
 📌 **General Tips**
 - Use `!>` or `/` for commands
-- Always test privately before using on others
 - Abuse will result in being blocked from the bot
 
 Need help? Contact the bot owner or moderators.
@@ -9526,18 +9848,20 @@ async def debugconfig(ctx):
 # ------- SERVER CONFIG
 def save_server_config(guild_id, prison_channel, line_channel, counting_channel, gambling_channel,
                        botstatus_channel, task_channel, log_channel,
-                       solitary_role, prisoner_role, sc_role):
+                       solitary_role, prisoner_role, sc_role, prefix=None):
+
     shared.c.execute("""
         INSERT OR REPLACE INTO server_config (
             guild_id, prison_channel_id, line_writing_id, counting_id, gambling_id,
             solitary_role_id, prisoner_role_id, sc_role_id,
-            botstatus_id, task_channel_id, log_channel_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            botstatus_id, task_channel_id, log_channel_id, prefix
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         guild_id,
         prison_channel.id, line_channel.id, counting_channel.id, gambling_channel.id,
         solitary_role.id, prisoner_role.id, sc_role.id,
-        botstatus_channel.id, task_channel.id, log_channel.id
+        botstatus_channel.id, task_channel.id, log_channel.id,
+        prefix or '!>'  # fallback to default if not provided
     ))
     shared.conn.commit()
 
@@ -9557,9 +9881,9 @@ async def setup_ids(ctx,
 
     save_server_config(
         ctx.guild.id,
-        prison_channel, line_writing_channel, counting_channel, gambling_channel,
-        botstatus_channel, task_channel, log_channel,
-        solitary_role, prisoner_role, sc_role
+        prison_channel, line_writing_channel, prison_channel, gambling_channel,
+        log_channel, task_channel, log_channel,
+        solitary_role, prisoner_role, solitary_role, 
     )
 
     await ctx.send("✅ Server config saved.")
@@ -9569,23 +9893,134 @@ async def setup_ids(ctx,
 async def setup_ids_slash(ctx,
     prison_channel: discord.Option(discord.TextChannel),
     line_writing_channel: discord.Option(discord.TextChannel),
-    counting_channel: discord.Option(discord.TextChannel),
     gambling_channel: discord.Option(discord.TextChannel),
-    botstatus_channel: discord.Option(discord.TextChannel),
-    task_channel: discord.Option(discord.TextChannel),
-    log_channel: discord.Option(discord.TextChannel),
     solitary_role: discord.Option(discord.Role),
     prisoner_role: discord.Option(discord.Role),
-    sc_role: discord.Option(discord.Role)):
+    task_channel: discord.Option(discord.TextChannel),
+    log_channel: discord.Option(discord.TextChannel),
+    prefix: discord.Option(str, required=False, description="Optional prefix (default: !>)")):
+
+
 
     save_server_config(
         ctx.guild.id,
-        prison_channel, line_writing_channel, counting_channel, gambling_channel,
-        botstatus_channel, task_channel, log_channel,
-        solitary_role, prisoner_role, sc_role
+        prison_channel, line_writing_channel, prison_channel, gambling_channel,
+        log_channel, task_channel, log_channel,
+        solitary_role, prisoner_role, solitary_role,
+        prefix=prefix
     )
 
     await ctx.respond("✅ Server config saved.", ephemeral=True)
+
+
+@bot.slash_command(name="see_mutual", description="Find users in a guild who share other servers with the bot (bot owner only).")
+@is_bot_owner()
+async def see_mutual(
+    ctx: discord.ApplicationContext,
+    guild_id: Option(str, "The ID of the guild to inspect.")
+):
+    await ctx.defer(ephemeral=True)
+
+    try:
+        target_guild = bot.get_guild(int(guild_id))
+        if not target_guild:
+            await ctx.respond("❌ Bot is not in that guild.")
+            return
+
+        try:
+            await target_guild.chunk()
+        except Exception:
+            pass  # Member chunking might fail on large guilds
+
+        shared_users = []
+
+        for member in target_guild.members:
+            if member.bot:
+                continue  # Skip bots
+
+            mutual_guilds = [g.name for g in bot.guilds if g.get_member(member.id) is not None]
+
+            if len(mutual_guilds) > 1:
+                shared_users.append((member.display_name, mutual_guilds))
+
+        if not shared_users:
+            await ctx.respond("✅ No mutual members found.", ephemeral=True)
+            return
+
+        # Build the message
+        chunks = []
+        for name, mutuals in shared_users:
+            line = f"**{name}**: " + ", ".join(mutuals)
+            chunks.append(line)
+
+        # DM in pages to avoid long message cutoffs
+        pages = [chunks[i:i+10] for i in range(0, len(chunks), 10)]
+        for i, page in enumerate(pages):
+            text = f"👥 Mutual Members in **{target_guild.name}** (Page {i+1}/{len(pages)}):\n\n" + "\n".join(page)
+            await ctx.author.send(text)
+
+        await ctx.respond("📬 Mutual member list sent to your DMs.", ephemeral=True)
+
+    except Exception as e:
+        await ctx.respond(f"⚠️ Error: {e}", ephemeral=True)
+
+
+@bot.slash_command(name="admin_set_config", description="Set config for any server by ID (bot owner only)")
+@is_bot_owner()
+async def admin_set_config(
+    ctx: discord.ApplicationContext,
+    guild_id: Option(str, "Guild ID to modify"),
+    prison_channel_id: Option(str, "Prison channel ID", required=False),
+    line_writing_channel_id: Option(str, "Line writing channel ID", required=False),
+    gambling_channel_id: Option(str, "Gambling channel ID", required=False),
+    solitary_role_id: Option(str, "Solitary role ID", required=False),
+    prisoner_role_id: Option(str, "Prisoner role ID", required=False),
+    task_channel_id: Option(str, "Task channel ID", required=False),
+    log_channel_id: Option(str, "Log channel ID", required=False),
+    prefix: Option(str, "Command prefix", required=False),
+):
+    guild_id = int(guild_id)
+
+    # Fetch current row if it exists
+    shared.c.execute("SELECT * FROM server_config WHERE guild_id = ?", (guild_id,))
+    existing = shared.c.fetchone()
+
+    # Insert default row if it doesn't exist
+    if not existing:
+        shared.c.execute("INSERT INTO server_config (guild_id) VALUES (?)", (guild_id,))
+        shared.conn.commit()
+
+    # Update each provided field
+    updates = []
+    values = []
+
+    def add(field_name, value):
+        if value is not None:
+            updates.append(f"{field_name} = ?")
+            values.append(value)
+
+    add("prison_channel_id", prison_channel_id)
+    add("line_writing_id", line_writing_channel_id)
+    add("gambling_id", gambling_channel_id)
+    add("solitary_role_id", solitary_role_id)
+    add("sc_role_id", solitary_role_id)
+    add("prisoner_role_id", prisoner_role_id)
+    add("task_channel_id", task_channel_id)
+    add("log_channel_id", log_channel_id)
+    add("prefix", prefix)
+
+    if updates:
+        query = f"UPDATE server_config SET {', '.join(updates)} WHERE guild_id = ?"
+        shared.c.execute(query, (*values, guild_id))
+        shared.conn.commit()
+
+        if prefix:
+            shared.prefixes[guild_id] = prefix
+
+        await ctx.respond(f"✅ Updated config for guild `{guild_id}`", ephemeral=True)
+    else:
+        await ctx.respond("⚠️ No fields were provided to update.", ephemeral=True)
+
 
 @bot.command(name="sync_commands")
 @with_config
@@ -9867,6 +10302,158 @@ async def guild_autocomplete(ctx: AutocompleteContext):
                 except Exception:
                     continue
     return options
+
+
+@bot.slash_command(name="check_configs", description="Check which servers lack a config (bot owner only).")
+@is_bot_owner()
+async def check_configs(ctx: discord.ApplicationContext):
+    await ctx.defer(ephemeral=True)
+
+    missing_configs = []
+
+    try:
+        with sqlite3.connect("db/global.db") as conn:
+            c = conn.cursor()
+
+            for guild in bot.guilds:
+                c.execute("SELECT 1 FROM server_config WHERE guild_id = ?", (guild.id,))
+                if not c.fetchone():
+                    missing_configs.append(f"{guild.name} ({guild.id})")
+
+        if not missing_configs:
+            await ctx.respond("✅ All servers have a config entry.", ephemeral=True)
+            return
+
+        # If list is long, paginate or truncate to avoid hitting message limits
+        response = "⚠️ Servers without a config:\n" + "\n".join(missing_configs)
+        # Discord message limit is 2000 chars, so truncate if needed
+        if len(response) > 1900:
+            response = response[:1900] + "\n…(truncated)"
+
+        await ctx.respond(response, ephemeral=True)
+
+    except Exception as e:
+        await ctx.respond(f"⚠️ Error checking configs: {e}", ephemeral=True)
+
+
+@bot.slash_command(name="list_servers", description="List all servers the bot is currently in (bot owner only).")
+@is_bot_owner()
+async def list_servers(ctx: discord.ApplicationContext):
+    guilds = bot.guilds
+    if not guilds:
+        await ctx.respond("❌ The bot is not in any servers.", ephemeral=True)
+        return
+
+    guild_list = [f"{g.name} ({g.id})" for g in guilds]
+    pages = [guild_list[i:i+10] for i in range(0, len(guild_list), 10)]
+    current_page = 0
+
+    # Helper to generate embed/page content
+    def make_page(page_index: int):
+        page_content = "\n".join(pages[page_index])
+        return f"📜 **Bot is in {len(guilds)} servers** (Page {page_index+1}/{len(pages)}):\n\n{page_content}"
+
+    # Create view with navigation buttons
+    class Paginator(View):
+        def __init__(self):
+            super().__init__(timeout=120)  # 2 min timeout
+
+        @discord.ui.button(label="⬅️ Prev", style=discord.ButtonStyle.secondary)
+        async def prev_button(self, button: Button, interaction: discord.Interaction):
+            nonlocal current_page
+            if current_page > 0:
+                current_page -= 1
+                await interaction.response.edit_message(content=make_page(current_page), view=self)
+
+        @discord.ui.button(label="➡️ Next", style=discord.ButtonStyle.secondary)
+        async def next_button(self, button: Button, interaction: discord.Interaction):
+            nonlocal current_page
+            if current_page < len(pages) - 1:
+                current_page += 1
+                await interaction.response.edit_message(content=make_page(current_page), view=self)
+
+    # Send initial page
+    await ctx.respond(make_page(current_page), view=Paginator())
+
+@bot.slash_command(name="get_admins", description="DM the display names and IDs of admins in a server (bot owner only).")
+@is_bot_owner()
+async def get_admins(
+    ctx: discord.ApplicationContext,
+    guild_id: Option(str, "The ID of the guild to inspect.")
+):
+    await ctx.defer(ephemeral=True)
+
+    try:
+        guild = bot.get_guild(int(guild_id))
+        if not guild:
+            await ctx.respond("❌ Bot is not in that guild.")
+            return
+
+        # Ensure all members are loaded
+        try:
+            await guild.chunk()
+        except Exception:
+            pass
+
+        admins = []
+        for member in guild.members:
+            if member.guild_permissions.administrator and not member.bot:
+                admins.append(f"{member.display_name} ({member.id})")
+
+        if not admins:
+            await ctx.respond("⚠️ No human administrators found in that guild.", ephemeral=True)
+            return
+
+        admin_list = "\n".join(admins)
+        message = f"🛡️ Administrators in **{guild.name}**:\n```{admin_list}```"
+
+        try:
+            await ctx.author.send(message)
+            await ctx.respond("✅ Administrator list sent to your DMs.", ephemeral=True)
+        except discord.Forbidden:
+            await ctx.respond("❌ Couldn't send DM. Please check your privacy settings.", ephemeral=True)
+
+    except Exception as e:
+        await ctx.respond(f"⚠️ Error: {e}", ephemeral=True)
+
+
+
+@bot.slash_command(name="get_invite", description="Get an invite to a server sent to your DMs (bot owner only).")
+@is_bot_owner()
+async def get_invite(
+    ctx: discord.ApplicationContext,
+    guild_id: Option(str, "The ID of the guild to get an invite for.")
+):
+    await ctx.defer(ephemeral=True)
+
+    try:
+        guild = bot.get_guild(int(guild_id))
+        if not guild:
+            await ctx.respond("❌ Bot is not in that guild.")
+            return
+
+        # Find a usable text channel
+        channel = None
+        for ch in guild.text_channels:
+            if ch.permissions_for(guild.me).create_instant_invite:
+                channel = ch
+                break
+
+        if not channel:
+            await ctx.respond("❌ No channel found where the bot can create invites.")
+            return
+
+        # Create the invite
+        invite = await channel.create_invite(max_age=300, max_uses=1, unique=True, reason="Bot owner requested invite")
+
+        try:
+            await ctx.author.send(f"🔗 Invite to **{guild.name}**: {invite.url}")
+            await ctx.respond("✅ Invite sent to your DMs!", ephemeral=True)
+        except discord.Forbidden:
+            await ctx.respond("❌ Couldn't send DM. Please check your privacy settings.", ephemeral=True)
+
+    except Exception as e:
+        await ctx.respond(f"⚠️ Error: {e}", ephemeral=True)
 
 
 
